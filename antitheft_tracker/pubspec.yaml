@@ -1,0 +1,27 @@
+name: antitheft_tracker
+description: A Flutter-based anti-theft tracker app
+version: 1.0.0+1
+
+environment:
+  sdk: ">=2.17.0 <3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.1.0           # For API calls
+  encrypt: ^5.0.3        # For AES encryption
+  flutter_secure_storage: ^9.0.0  # For secure token storage
+  geolocator: ^12.0.0    # For location tracking
+  flutter_dotenv: ^5.1.0 # For environment variables
+  flutter_map: ^7.0.2      # Add for map display
+  latlong2: ^0.9.1
+  sensors_plus: ^5.0.1  # Add for accelerometer
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+  assets:
+    - .env
