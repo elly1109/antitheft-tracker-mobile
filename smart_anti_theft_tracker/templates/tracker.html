@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Smart Anti-Theft Tracker</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <h1>Smart Anti-Theft Device Tracker</h1>
+    {% if device_id %}
+        <p><strong>Device ID:</strong> {{ device_id }}</p>
+        <p><strong>Last Location:</strong> ({{ lat|round(4) }}, {{ lon|round(4) }})</p>
+        <p><strong>Timestamp:</strong> {{ timestamp }}</p>
+    {% else %}
+        <p>Device not yet located.</p>
+    {% endif %}
+</body>
+</html>
