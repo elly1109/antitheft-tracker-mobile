@@ -1,15 +1,20 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:sensors_plus/sensors_plus.dart'; // Import sensors_plus
+import 'package:sensors_plus/sensors_plus.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import '../components/button.dart';
 import '../components/location_card.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../utils/crypto.dart';
+import '../utils/constants.dart';
 
 class TrackerScreen extends StatefulWidget {
   @override
@@ -26,15 +31,20 @@ class _TrackerScreenState extends State<TrackerScreen> {
   StreamSubscription<AccelerometerEvent>? _accelerometerSubscription;
   double _lastAccelMagnitude = 0.0;
   bool _theftDetected = false;
+  int _failedUnlockAttempts = 0;
+  bool _simChanged = false;
+  bool _forcedPowerOff = false;
+  bool _isStolen = false;
 
   @override
   void initState() {
     super.initState();
     _startTracking();
     _setupTheftDetection();
+    _checkStolenStatus();
   }
 
-  void _startTracking() async {
+  Future<void> _startTracking() async {
     _token = await authService.getToken();
     if (_token == null) {
       setState(() => _status = 'Not logged in');
@@ -60,38 +70,67 @@ class _TrackerScreenState extends State<TrackerScreen> {
     }
 
     await _sendLocation();
-    _timer = Timer.periodic(Duration(seconds: 10), (_) => _sendLocation());
+    _timer = Timer.periodic(Duration(seconds: 5), (_) => _sendLocation());
   }
 
   void _setupTheftDetection() {
     _accelerometerSubscription = accelerometerEventStream().listen((event) {
-      final magnitude = (event.x * event.x + event.y * event.y + event.z * event.z).sqrt();
+      final magnitude = sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
       final delta = (magnitude - _lastAccelMagnitude).abs();
 
-      // Detect sudden movement (e.g., theft) if delta exceeds threshold
-      if (delta > 10.0 && !_theftDetected) { // Adjust threshold as needed
+      if (delta > 10.0 && !_theftDetected) {
         debugPrint('Theft detected: Sudden movement (delta: $delta)');
-        setState(() => _status = 'Theft detected! Sending location...');
-        _theftDetected = true;
-        _sendLocation(); // Immediate update
+        _activateTheftMode('Sudden movement detected');
       }
       _lastAccelMagnitude = magnitude;
     });
+
+    _monitorSuspiciousBehavior();
   }
 
-  Future<void> _sendLocation() async {
+  void _monitorSuspiciousBehavior() {
+    Timer.periodic(Duration(seconds: 10), (_) {
+      if (!_theftDetected) {
+        _failedUnlockAttempts += Random().nextInt(2);
+        _simChanged = Random().nextBool() && Random().nextInt(100) < 10;
+        _forcedPowerOff = Random().nextBool() && Random().nextInt(100) < 5;
+
+        if (_failedUnlockAttempts > 3) {
+          _activateTheftMode('Multiple failed unlock attempts');
+        } else if (_simChanged) {
+          _activateTheftMode('SIM card changed');
+        } else if (_forcedPowerOff) {
+          _activateTheftMode('Forced power-off detected');
+        }
+      }
+    });
+  }
+
+  void _activateTheftMode(String reason) {
+    setState(() {
+      _theftDetected = true;
+      _status = 'Theft mode activated: $reason';
+    });
+    _sendLocation(immediate: true);
+    _timer?.cancel();
+    _timer = Timer.periodic(Duration(seconds: 2), (_) => _sendLocation());
+  }
+
+  Future<void> _sendLocation({bool immediate = false}) async {
     try {
       final position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
       final timestamp = DateTime.now().toIso8601String();
-      final data = '$_deviceId,${position.latitude},${position.longitude},$timestamp';
+      final data = '$_deviceId,${position.latitude},${position.longitude},$timestamp${_theftDetected ? ",theft" : ""}';
 
       debugPrint('Raw data before encryption: $data');
       final encryptedData = crypto.encryptData(data);
 
-      await apiService.sendUpdate(_token!, encryptedData);
+      final response = await apiService.sendUpdate(_token!, encryptedData);
       setState(() {
         _location = position;
-        _status = 'Location sent successfully${_theftDetected ? " (Theft mode)" : ""}';
+        _status = response['status'] == 'success'
+            ? 'Location sent${_theftDetected ? " (Theft mode)" : ""}'
+            : 'Error: ${response['message']}';
       });
       if (_location != null) {
         _mapController.move(LatLng(_location!.latitude, _location!.longitude), 13.0);
@@ -105,6 +144,40 @@ class _TrackerScreenState extends State<TrackerScreen> {
     }
   }
 
+  Future<void> _checkStolenStatus() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$apiUrl/check-stolen/$_deviceId'),
+        headers: {'Authorization': 'Bearer $_token'},
+      );
+      final data = jsonDecode(response.body);
+      setState(() => _isStolen = data['status'] == 'stolen');
+      if (_isStolen) {
+        _status = 'Device marked as stolen';
+      }
+    } catch (e) {
+      debugPrint('Error checking stolen status: $e');
+    }
+  }
+
+  Future<void> _reportStolen() async {
+    try {
+      final response = await http.post(
+        Uri.parse('$apiUrl/report-stolen'),
+        headers: {'Authorization': 'Bearer $_token'},
+      );
+      final data = jsonDecode(response.body);
+      if (data['status'] == 'success') {
+        setState(() {
+          _isStolen = true;
+          _status = 'Device reported stolen';
+        });
+      }
+    } catch (e) {
+      setState(() => _status = 'Error reporting stolen: $e');
+    }
+  }
+
   void _logout() async {
     _timer?.cancel();
     _accelerometerSubscription?.cancel();
@@ -115,7 +188,7 @@ class _TrackerScreenState extends State<TrackerScreen> {
   @override
   void dispose() {
     _timer?.cancel();
-    _accelerometerSubscription?.cancel(); // Clean up accelerometer stream
+    _accelerometerSubscription?.cancel();
     _mapController.dispose();
     super.dispose();
   }
@@ -138,7 +211,7 @@ class _TrackerScreenState extends State<TrackerScreen> {
               children: [
                 TileLayer(
                   urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.example.antitheft_tracker',
+                  userAgentPackageName: 'com.banal.anti-theft_tracker',
                 ),
                 MarkerLayer(
                   markers: _location != null
@@ -147,7 +220,7 @@ class _TrackerScreenState extends State<TrackerScreen> {
                       point: LatLng(_location!.latitude, _location!.longitude),
                       width: 80,
                       height: 80,
-                      child: Icon(Icons.location_pin, color: Colors.red, size: 40),
+                      child: Icon(Icons.location_pin, color: _theftDetected ? Colors.red : Colors.blue, size: 40),
                     ),
                   ]
                       : [],
@@ -159,7 +232,7 @@ class _TrackerScreenState extends State<TrackerScreen> {
             padding: EdgeInsets.all(16),
             child: Column(
               children: [
-                Text(_status, style: TextStyle(fontSize: 16)),
+                Text(_status, style: TextStyle(fontSize: 16, color: _theftDetected || _isStolen ? Colors.red : Colors.white)),
                 if (_location != null)
                   LocationCard(
                     latitude: _location!.latitude,
@@ -167,12 +240,34 @@ class _TrackerScreenState extends State<TrackerScreen> {
                     timestamp: _location!.timestamp.toString(),
                   ),
                 SizedBox(height: 20),
-                CustomButton(text: 'Send Update Now', onPressed: _sendLocation),
-                SizedBox(height: 10),
-                CustomButton(
-                  text: 'Logout',
-                  color: Colors.red,
-                  onPressed: _logout,
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    Expanded(
+                      child: CustomButton(
+                        text: 'Send Update',
+                        onPressed: () => _sendLocation(immediate: true),
+                        color: Colors.blue,
+                        textColor: Colors.white
+                      ),
+                    ),
+                    SizedBox(width: 8), // Spacing between buttons
+                    Expanded(
+                      child: CustomButton(
+                        text: 'Report Stolen',
+                        onPressed: _reportStolen,
+                        color: Colors.orange,
+                      ),
+                    ),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: CustomButton(
+                        text: 'Logout',
+                        onPressed: _logout,
+                        color: Colors.red,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),

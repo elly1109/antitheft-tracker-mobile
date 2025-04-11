@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
-import '../components/button.dart';
-import '../components/input.dart';
-import '../services/api_service.dart';
 import '../services/auth_service.dart';
+import '../components/button.dart'; // Assuming this exists
 
 class LoginScreen extends StatefulWidget {
   @override
@@ -10,22 +8,20 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _deviceIdController = TextEditingController();
+  final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  bool _isLoading = false;
+  String _status = '';
 
   void _login() async {
-    setState(() => _isLoading = true);
-    try {
-      final response = await apiService.login(_deviceIdController.text, _passwordController.text);
+    final response = await authService.login(
+      _emailController.text,
+      _passwordController.text,
+    );
+    setState(() => _status = response['message'] ?? 'Login failed');
+    if (response['status'] == 'success') {
       final token = response['token'];
-      await authService.storeToken(token);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Login successful')));
-      Navigator.pushNamed(context, '/tracker', arguments: _deviceIdController.text);
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
-    } finally {
-      setState(() => _isLoading = false);
+      await authService.saveToken(token);
+      Navigator.pushReplacementNamed(context, '/tracker', arguments: response['device_id']);
     }
   }
 
@@ -36,33 +32,28 @@ class _LoginScreenState extends State<LoginScreen> {
       body: Padding(
         padding: EdgeInsets.all(16),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CustomInput(hintText: 'Device ID', controller: _deviceIdController),
-            SizedBox(height: 10),
-            CustomInput(hintText: 'Password', obscureText: true, controller: _passwordController),
-            SizedBox(height: 20),
-            CustomButton(
-              text: _isLoading ? 'Logging in...' : 'Login',
-              onPressed: _isLoading ? () {} : _login, // Non-null callback
-              color: _isLoading ? Colors.grey : Colors.blue,
+            TextField(
+              controller: _emailController,
+              decoration: InputDecoration(labelText: 'Email'),
+              keyboardType: TextInputType.emailAddress,
             ),
+            TextField(
+              controller: _passwordController,
+              decoration: InputDecoration(labelText: 'Password'),
+              obscureText: true,
+            ),
+            SizedBox(height: 20),
+            CustomButton(text: 'Login', onPressed: _login, textColor: Colors.white,),
             SizedBox(height: 10),
-            CustomButton(
-              text: 'Go to Register',
-              color: Colors.grey,
-              onPressed: () => Navigator.pushNamed(context, '/register'),
+            Text(_status),
+            TextButton(
+              onPressed: () => Navigator.pushReplacementNamed(context, '/register'),
+              child: Text('Need an account? Register'),
             ),
           ],
         ),
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    _deviceIdController.dispose();
-    _passwordController.dispose();
-    super.dispose();
   }
 }

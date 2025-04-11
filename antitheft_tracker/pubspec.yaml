@@ -13,9 +13,11 @@ dependencies:
   flutter_secure_storage: ^9.0.0  # For secure token storage
   geolocator: ^12.0.0    # For location tracking
   flutter_dotenv: ^5.1.0 # For environment variables
-  flutter_map: ^7.0.2      # Add for map display
+  flutter_map: ^7.0.2      #For map display
   latlong2: ^0.9.1
-  sensors_plus: ^5.0.1  # Add for accelerometer
+  sensors_plus: ^5.0.1  # for accelerometer
+  flutter_blue_plus: ^1.32.9  # for BLE Mesh
+  device_info_plus: ^10.1.0
 
 dev_dependencies:
   flutter_test:
