@@ -19,11 +19,15 @@ class Crypto:
         return base64.b64encode(iv + encrypted).decode('utf-8')
 
     def decrypt(self, encrypted_data):
-        raw = base64.b64decode(encrypted_data)
-        iv = raw[:16]  # First 16 bytes are IV
-        encrypted = raw[16:]
-        cipher = AES.new(self.key, AES.MODE_CBC, iv=iv)
-        decrypted = unpad(cipher.decrypt(encrypted), AES.block_size, style='pkcs7')
-        return decrypted.decode('utf-8')
+        try:
+            raw = base64.b64decode(encrypted_data)
+            iv = raw[:16]  # First 16 bytes are IV
+            encrypted = raw[16:]
+            cipher = AES.new(self.key, AES.MODE_CBC, iv=iv)
+            decrypted = unpad(cipher.decrypt(encrypted), AES.block_size, style='pkcs7')
+            return decrypted.decode('utf-8')
+        except Exception as e:
+            print(f"Decryption error: {str(e)}")
+            raise Exception(f"Failed to decrypt data: {str(e)}")
 
 crypto = Crypto()

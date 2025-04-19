@@ -1,25 +1,54 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-from flask_cors import CORS
 from flask_bcrypt import Bcrypt
 import jwt
 import datetime
 from functools import wraps
 from dotenv import load_dotenv
 import os
-from crypto_utils import crypto
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
+import base64
 import json
 
-load_dotenv()
 app = Flask(__name__)
+load_dotenv()
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///antitheft.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
-CORS(app)
 bcrypt = Bcrypt(app)
 
+# AES key setup
+ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY', '').ljust(32, '\0')[:32].encode('utf-8')  # Ensure 32 bytes
+if len(ENCRYPTION_KEY) != 32:
+    raise ValueError(f"ENCRYPTION_KEY must be 32 bytes, got {len(ENCRYPTION_KEY)} bytes")
+
+class Crypto:
+    def __init__(self):
+        self.key = ENCRYPTION_KEY
+
+    def encrypt(self, data):
+        iv = os.urandom(16)  # 16-byte IV
+        cipher = AES.new(self.key, AES.MODE_CBC, iv=iv)
+        padded_data = pad(data.encode('utf-8'), AES.block_size, style='pkcs7')
+        encrypted = cipher.encrypt(padded_data)
+        return base64.b64encode(iv + encrypted).decode('utf-8')
+
+    def decrypt(self, encrypted_data):
+        try:
+            raw = base64.b64decode(encrypted_data)
+            iv = raw[:16]  # First 16 bytes are IV
+            encrypted = raw[16:]
+            cipher = AES.new(self.key, AES.MODE_CBC, iv=iv)
+            decrypted = unpad(cipher.decrypt(encrypted), AES.block_size, style='pkcs7')
+            return decrypted.decode('utf-8')
+        except Exception as e:
+            print(f"Decryption error: {str(e)}")
+            raise Exception(f"Failed to decrypt data: {str(e)}")
+
+crypto = Crypto()
 
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -28,7 +57,6 @@ class User(db.Model):
     password = db.Column(db.String(100), nullable=False)
     is_stolen = db.Column(db.Boolean, default=False)
 
-
 class Location(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     device_id = db.Column(db.String(50), nullable=False)
@@ -36,7 +64,6 @@ class Location(db.Model):
     longitude = db.Column(db.Float, nullable=False)
     timestamp = db.Column(db.DateTime, nullable=False)
     is_theft = db.Column(db.Boolean, default=False)
-
 
 def token_required(f):
     @wraps(f)
@@ -53,26 +80,7 @@ def token_required(f):
         except Exception as e:
             return jsonify({"status": "error", "message": f"Token is invalid: {str(e)}"}), 401
         return f(current_user, *args, **kwargs)
-
     return decorated
-
-
-@app.route('/register', methods=['POST'])
-def register():
-    data = request.get_json()
-    email = data.get('email')
-    password = data.get('password')
-    device_id = data.get('device_id')
-    if User.query.filter_by(email=email).first():
-        return jsonify({"status": "error", "message": "Email already registered"}), 400
-    if User.query.filter_by(device_id=device_id).first():
-        return jsonify({"status": "error", "message": "Device ID already registered"}), 400
-    hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
-    new_user = User(email=email, device_id=device_id, password=hashed_password)
-    db.session.add(new_user)
-    db.session.commit()
-    return jsonify({"status": "success", "message": "User registered"}), 201
-
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -83,32 +91,50 @@ def login():
             'email': user.email,
             'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
         }, app.config['SECRET_KEY'], algorithm="HS256")
-        return jsonify({"status": "success", "token": token, "device_id": user.device_id, "is_stolen": user.is_stolen})
-    return jsonify({"status": "error", "message": "Invalid credentials"}), 401
 
+        return jsonify({
+            "status": "success",
+            "token": token,
+            "device_id": user.device_id,
+            "is_stolen": user.is_stolen
+        })
+    return jsonify({"status": "error", "message": "Invalid credentials"}), 401
 
 @app.route('/update', methods=['POST'])
 @token_required
 def receive_update(current_user):
-    encrypted_data = request.json.get('data')
-    try:
-        print(f"Encrypted data: {encrypted_data}")
-        decrypted = crypto.decrypt(encrypted_data)
-        print(f"Decrypted data: {decrypted}")
+    data = request.get_json()
 
-        parts = decrypted.split(',')
-        device_id, lat, lon, ts = parts[0:4]
-        is_theft = len(parts) > 4 and parts[4] == "theft"
+    encrypted_data = data.get('data')
+
+    print(encrypted_data)
+
+    if not encrypted_data:
+        return jsonify({"status": "error", "message": "Missing encrypted data"}), 400
+
+    try:
+        decrypted_json = crypto.decrypt(encrypted_data)
+        decrypted_data = json.loads(decrypted_json)
+        print(f"Decrypted data: {decrypted_data}")
+
+        device_id = decrypted_data.get('device_id')
+        latitude = decrypted_data.get('latitude')
+        longitude = decrypted_data.get('longitude')
+        timestamp = decrypted_data.get('timestamp')
+        is_theft = decrypted_data.get('is_theft', False)
+
+        if not all([device_id, latitude, longitude, timestamp]):
+            return jsonify({"status": "error", "message": "Missing required fields"}), 400
 
         if device_id != current_user.device_id:
+            print(f"Device ID mismatch: received {device_id}, expected {current_user.device_id}")
             return jsonify({"status": "error", "message": "Device ID mismatch"}), 403
 
-        timestamp = datetime.datetime.fromisoformat(ts.replace('Z', '+00:00'))
-
+        timestamp = datetime.datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
         location = Location(
             device_id=device_id,
-            latitude=float(lat),
-            longitude=float(lon),
+            latitude=float(latitude),
+            longitude=float(longitude),
             timestamp=timestamp,
             is_theft=is_theft
         )
@@ -119,7 +145,6 @@ def receive_update(current_user):
         db.session.rollback()
         print(f"Error: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 400
-
 
 @app.route('/latest', methods=['GET'])
 @token_required
@@ -138,24 +163,7 @@ def get_latest_location(current_user):
         }), 200
     return jsonify({"status": "error", "message": "No location data available"}), 404
 
-
-@app.route('/report-stolen', methods=['POST'])
-@token_required
-def report_stolen(current_user):
-    current_user.is_stolen = True
-    db.session.commit()
-    return jsonify({"status": "success", "message": "Device marked as stolen"}), 200
-
-
-@app.route('/check-stolen/<device_id>', methods=['GET'])
-def check_stolen(device_id):
-    user = User.query.filter_by(device_id=device_id).first()
-    if user and user.is_stolen:
-        return jsonify({"status": "stolen", "device_id": device_id}), 200
-    return jsonify({"status": "not_stolen", "device_id": device_id}), 200
-
-
 if __name__ == "__main__":
     with app.app_context():
-        db.create_all()  # Use drop_all() only if resetting
+        db.create_all()
     app.run(debug=True, host='0.0.0.0', port=5000)
