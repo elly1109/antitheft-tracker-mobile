@@ -7,16 +7,21 @@ class AppRouter {
   Route<dynamic> generateRoute(RouteSettings settings) {
     switch (settings.name) {
       case '/register':
-        return MaterialPageRoute(builder: (_) => RegisterScreen());
+        return MaterialPageRoute(builder: (_) => const RegisterScreen());
       case '/login':
-        return MaterialPageRoute(builder: (_) => LoginScreen());
+        return MaterialPageRoute(builder: (_) => const LoginScreen());
       case '/tracker':
+      // Extract deviceId from arguments
+        final deviceId = settings.arguments as String?;
+        if (deviceId == null) {
+          // Redirect to login if no deviceId is provided
+          return MaterialPageRoute(builder: (_) => const LoginScreen());
+        }
         return MaterialPageRoute(
-          builder: (_) => TrackerScreen(),
-          settings: settings, // Pass deviceId as argument
+          builder: (_) => TrackerScreen(deviceId: deviceId),
         );
       default:
-        return MaterialPageRoute(builder: (_) => RegisterScreen());
+        return MaterialPageRoute(builder: (_) => const LoginScreen());
     }
   }
 }

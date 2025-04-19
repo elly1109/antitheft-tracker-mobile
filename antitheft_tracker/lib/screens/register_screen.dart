@@ -1,11 +1,12 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:http/http.dart' as http;
-import '../services/api_service.dart';
-import '../components/button.dart';
-import 'dart:convert';
+import '../services/ai_protection_service.dart';
+import '../services/auth_service.dart'; // Import AuthService
 
 class RegisterScreen extends StatefulWidget {
+  const RegisterScreen({super.key});
+
   @override
   _RegisterScreenState createState() => _RegisterScreenState();
 }
@@ -13,117 +14,116 @@ class RegisterScreen extends StatefulWidget {
 class _RegisterScreenState extends State<RegisterScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  String _status = '';
+  final _aiService = AIProtectionService();
   String? _deviceId;
-  bool _isDeviceIdLoading = true;
+  bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _getDeviceId();
-    });
+    _getDeviceId();
   }
 
   Future<void> _getDeviceId() async {
     final deviceInfo = DeviceInfoPlugin();
-    try {
-      if (!mounted) return;
-      if (Theme.of(context).platform == TargetPlatform.android) {
-        final androidInfo = await deviceInfo.androidInfo;
-        _deviceId = androidInfo.id;
-      } else if (Theme.of(context).platform == TargetPlatform.iOS) {
-        final iosInfo = await deviceInfo.iosInfo;
-        _deviceId = iosInfo.identifierForVendor;
-      }
-      debugPrint('Device ID: $_deviceId');
-    } catch (e) {
-      _deviceId = 'unknown_${DateTime.now().millisecondsSinceEpoch}';
-      debugPrint('Error getting device ID: $e');
-      if (mounted) {
-        setState(() => _status = 'Device ID error: $e');
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isDeviceIdLoading = false);
-      }
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      final iosInfo = await deviceInfo.iosInfo;
+      _deviceId = iosInfo.identifierForVendor;
+    } else {
+      final androidInfo = await deviceInfo.androidInfo;
+      _deviceId = androidInfo.id;
     }
+    await _aiService.init(_deviceId!);
+    setState(() {});
   }
 
   Future<void> _register() async {
-    if (_isDeviceIdLoading) {
-      setState(() => _status = 'Device ID still loading, please wait');
-      return;
-    }
-    if (_deviceId == null) {
-      setState(() => _status = 'Device ID not ready, retrying...');
-      await _getDeviceId();
-      if (_deviceId == null) {
-        setState(() => _status = 'Failed to get Device ID');
-        return;
-      }
-    }
-
-    setState(() => _status = 'Registering...');
+    setState(() => _isLoading = true);
     try {
-      final response = await apiService.register(
-        _emailController.text.trim(),
+      // Use AuthService to handle registration
+      final response = await authService.register(
+        _emailController.text,
         _passwordController.text,
         _deviceId!,
-      ).timeout(Duration(seconds: 10), onTimeout: () {
-        throw Exception('Request timed out');
-      });
-
-      debugPrint('Register response: $response');
-      setState(() => _status = response['message'] ?? 'Unknown response');
-
+      );
       if (response['status'] == 'success') {
+        await _aiService.setPassword(_passwordController.text);
         Navigator.pushReplacementNamed(context, '/login');
       } else {
-        setState(() => _status = response['message'] ?? 'Registration failed');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(response['message'])),
+        );
       }
     } catch (e) {
-      debugPrint('Registration error: $e');
-      setState(() => _status = 'Registration failed: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Registration error: $e')),
+      );
     }
-  }
-
-  void _onRegisterPressed() {
-    _register(); // Wrap async call in a sync function
+    setState(() => _isLoading = false);
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_aiService.isLocked) {
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text('App Locked: Suspicious Activity'),
+              TextField(
+                obscureText: true,
+                decoration: const InputDecoration(labelText: 'Password'),
+                onSubmitted: (value) async {
+                  if (await _aiService.authenticate(value)) {
+                    _aiService.unlock();
+                    setState(() {});
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Invalid password')),
+                    );
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
-      appBar: AppBar(title: Text('Register')),
+      appBar: AppBar(title: const Text('Register')),
       body: Padding(
-        padding: EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
             TextField(
               controller: _emailController,
-              decoration: InputDecoration(labelText: 'Email'),
-              keyboardType: TextInputType.emailAddress,
+              decoration: const InputDecoration(labelText: 'Email'),
             ),
             TextField(
               controller: _passwordController,
-              decoration: InputDecoration(labelText: 'Password'),
+              decoration: const InputDecoration(labelText: 'Password'),
               obscureText: true,
             ),
-            SizedBox(height: 20),
-            CustomButton(
-              text: 'Register',
-              onPressed: _isDeviceIdLoading ? null : _onRegisterPressed, // Use sync wrapper
+            const SizedBox(height: 20),
+            Text('Device ID: ${_deviceId ?? "Loading..."}'),
+            const SizedBox(height: 20),
+            _isLoading
+                ? const CircularProgressIndicator()
+                : ElevatedButton(
+              onPressed: _register,
+              child: const Text('Register'),
             ),
-            SizedBox(height: 10),
-            if (_isDeviceIdLoading) CircularProgressIndicator(),
-            Text(
-              _status,
-              style: TextStyle(color: _status.contains('failed') ? Colors.red : Colors.black),
-            ),
+            const SizedBox(height: 10),
             TextButton(
-              onPressed: () => Navigator.pushReplacementNamed(context, '/login'),
-              child: Text('Already have an account? Login'),
+              onPressed: () {
+                Navigator.pushNamed(context, '/login');
+              },
+              child: const Text(
+                'Already registered? Log in',
+                style: TextStyle(color: Colors.blue),
+              ),
             ),
           ],
         ),
@@ -133,6 +133,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   void dispose() {
+    _aiService.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();

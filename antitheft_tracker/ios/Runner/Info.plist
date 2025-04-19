@@ -28,6 +28,13 @@
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
+	<!-- Allow URL schemes for WalletConnect and MetaMask -->
+      <key>LSApplicationQueriesSchemes</key>
+      <array>
+        <string>metamask</string>
+        <string>wc</string> <!-- WalletConnect -->
+        <string>trust</string> <!-- Optional: Trust Wallet -->
+      </array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -48,6 +55,14 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
     <string>This app needs location access to track your device.</string>
     <key>NSBluetoothAlwaysUsageDescription</key>
-     <string>This app needs Bluetooth to track your device offline.</string>
+    <string>Bluetooth is used to detect nearby devices for theft tracking.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Location is used to track your device.</string>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>bluetooth-central</string>
+        <string>bluetooth-peripheral</string>
+        <string>location</string>
+    </array>
 </dict>
 </plist>

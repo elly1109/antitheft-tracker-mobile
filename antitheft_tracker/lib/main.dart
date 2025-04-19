@@ -10,6 +10,8 @@ void main() async {
 class AntiTheftTrackerApp extends StatelessWidget {
   final _router = AppRouter();
 
+
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(

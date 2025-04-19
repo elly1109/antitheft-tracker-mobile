@@ -4,23 +4,25 @@ import 'constants.dart';
 
 class Crypto {
   final encrypter = encrypt.Encrypter(encrypt.AES(
-    encrypt.Key.fromUtf8(encryptionKey.padRight(32, '\0').substring(0, 32)), // Ensure 32-byte key
+    encrypt.Key.fromUtf8(encryptionKey.padRight(32, '\0').substring(0, 32)),
     mode: encrypt.AESMode.cbc,
-    padding: 'PKCS7', // Explicitly use PKCS7 padding
+    padding: 'PKCS7',
   ));
 
-  String encryptData(String data) {
-    final iv = encrypt.IV.fromSecureRandom(16); // 16-byte IV
-    final encrypted = encrypter.encrypt(data, iv: iv);
-    final combined = iv.bytes + encrypted.bytes; // Prepend IV
-    return base64Encode(combined); // Base64 encode IV + ciphertext
+  String encryptData(Map<String, dynamic> data) {
+    final iv = encrypt.IV.fromSecureRandom(16);
+    final jsonString = jsonEncode(data);
+    final encrypted = encrypter.encrypt(jsonString, iv: iv);
+    final combined = iv.bytes + encrypted.bytes;
+    return base64Encode(combined);
   }
 
-  String decryptData(String encryptedData) {
+  Map<String, dynamic> decryptData(String encryptedData) {
     final decoded = base64Decode(encryptedData);
     final iv = encrypt.IV(decoded.sublist(0, 16));
     final encrypted = decoded.sublist(16);
-    return encrypter.decrypt(encrypt.Encrypted(encrypted), iv: iv);
+    final decrypted = encrypter.decrypt(encrypt.Encrypted(encrypted), iv: iv);
+    return jsonDecode(decrypted);
   }
 }
 
